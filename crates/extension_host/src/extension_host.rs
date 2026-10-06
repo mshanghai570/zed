@@ -1,6 +1,7 @@
 mod capability_granter;
 pub mod extension_settings;
 pub mod headless_host;
+pub mod open_vsx;
 pub mod wasm_host;
 
 #[cfg(test)]
