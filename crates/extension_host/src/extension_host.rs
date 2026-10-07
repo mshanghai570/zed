@@ -658,6 +658,25 @@ impl ExtensionStore {
         self.fetch_extensions_from_api("/extensions", &query, cx)
     }
 
+    pub fn fetch_open_vsx_extensions(
+        &self,
+        search: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<Vec<open_vsx::OpenVsxSearchEntry>>> {
+        let source = match ExtensionSettings::get_global(cx).open_vsx_source() {
+            Ok(source) => source,
+            Err(error) => return Task::ready(Err(error)),
+        };
+        let client = self.http_client.clone();
+        let search = search.map(str::to_owned);
+        cx.background_spawn(async move {
+            source
+                .search(client, search.as_deref(), 18, 0)
+                .await
+                .map(|result| result.extensions)
+        })
+    }
+
     pub fn fetch_extensions_with_update_available(
         &mut self,
         cx: &mut Context<Self>,

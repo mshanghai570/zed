@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use cloud_api_types::{ExtensionApiManifest, ExtensionMetadata, ExtensionProvides};
 use extension::{ExtensionManifest, SchemaVersion};
-use extension_host::{ExtensionOperation, ExtensionStore};
+use extension_host::{ExtensionOperation, ExtensionStore, open_vsx::OpenVsxSearchEntry};
 use gpui::{Anchor, ElementId, Entity, Point, SharedString, prelude::*};
 use num_format::{Locale, ToFormattedString};
 use release_channel::ReleaseChannel;
@@ -80,6 +80,9 @@ enum ExtensionCardSource {
         status: ExtensionStatus,
         download_count: u64,
     },
+    External {
+        download_count: Option<u32>,
+    },
 }
 
 impl ExtensionCardSource {
@@ -96,6 +99,7 @@ impl ExtensionCardSource {
     fn download_count(&self) -> Option<u64> {
         match self {
             Self::Remote { download_count, .. } => Some(*download_count),
+            Self::External { download_count } => download_count.map(u64::from),
             Self::Dev => None,
         }
     }
@@ -132,6 +136,33 @@ impl ExtensionCard {
     pub fn for_remote(extension: &ExtensionMetadata, cx: &App) -> Self {
         let status = remote_extension_status(&extension.id, cx);
         Self::remote::<true>(extension, status, cx)
+    }
+
+    pub fn for_open_vsx(extension: &OpenVsxSearchEntry) -> Self {
+        let id: Arc<str> = format!("open-vsx/{}.{}", extension.namespace, extension.name).into();
+        let name = extension
+            .display_name
+            .clone()
+            .unwrap_or_else(|| extension.name.clone());
+        let authors = format!("{} · Open VSX", extension.namespace);
+
+        Self {
+            details: ExtensionCardDetails {
+                id,
+                name: name.into(),
+                version: extension.version.clone().into(),
+                description: extension.description.clone().map(Into::into),
+                authors: authors.into(),
+                repository_url: Some(extension.url.clone().into()),
+                repository_icon: IconName::Link,
+                provided_features: Vec::new(),
+                source: ExtensionCardSource::External {
+                    download_count: extension.download_count,
+                },
+            },
+            actions: [None, None, None],
+            context_menu: None,
+        }
     }
 
     fn dev<const ENABLE_HANDLERS: bool>(

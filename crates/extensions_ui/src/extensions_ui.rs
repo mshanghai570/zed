@@ -11,7 +11,7 @@ use cloud_api_types::{ExtensionMetadata, ExtensionProvides};
 use collections::{BTreeMap, BTreeSet};
 use command_palette_hooks::CommandPaletteFilter;
 use editor::{Editor, EditorElement, EditorStyle};
-use extension_host::{ExtensionManifest, ExtensionStore};
+use extension_host::{ExtensionManifest, ExtensionStore, open_vsx::OpenVsxSearchEntry};
 use fuzzy::{StringMatch, StringMatchCandidate, match_strings};
 use git::{GitHostingProviderRegistry, parse_git_remote_url};
 use gpui::{
@@ -379,6 +379,7 @@ pub struct ExtensionsPage {
     fetch_failed: bool,
     filter: ExtensionFilter,
     remote_extension_entries: Vec<ExtensionMetadata>,
+    open_vsx_extension_entries: Vec<OpenVsxSearchEntry>,
     dev_extension_entries: Vec<Arc<ExtensionManifest>>,
     filtered_remote_extension_indices: Vec<usize>,
     filtered_dev_extension_indices: Vec<usize>,
@@ -446,6 +447,7 @@ impl ExtensionsPage {
                 filtered_remote_extension_indices: Vec::new(),
                 filtered_dev_extension_indices: Vec::new(),
                 remote_extension_entries: Vec::new(),
+                open_vsx_extension_entries: Vec::new(),
                 query_contains_error: false,
                 provides_filter,
                 extension_fetch_task: None,
@@ -596,6 +598,9 @@ impl ExtensionsPage {
                     store.fetch_extensions(search.as_deref(), provides_filter.as_ref(), cx)
                 })
             };
+        let open_vsx_extensions = extension_store.update(cx, |store, cx| {
+            store.fetch_open_vsx_extensions(search.as_deref(), cx)
+        });
 
         cx.spawn(async move |this, cx| {
             let dev_extensions = if let Some(search) = search {
@@ -624,10 +629,12 @@ impl ExtensionsPage {
             };
 
             let fetch_result = remote_extensions.await;
+            let open_vsx_extensions = open_vsx_extensions.await.unwrap_or_default();
 
             let result = this.update(cx, |this, cx| {
                 cx.notify();
                 this.dev_extension_entries = dev_extensions;
+                this.open_vsx_extension_entries = open_vsx_extensions;
                 this.is_fetching_extensions = false;
 
                 match fetch_result {
@@ -664,6 +671,13 @@ impl ExtensionsPage {
         } else {
             0
         };
+        let open_vsx_entries_len =
+            if self.filter != ExtensionFilter::Installed && self.provides_filter.is_none() {
+                self.open_vsx_extension_entries.len()
+            } else {
+                0
+            };
+        let remote_entries_len = self.filtered_remote_extension_indices.len();
         range
             .map(|ix| {
                 if ix < dev_extension_entries_len {
@@ -679,11 +693,18 @@ impl ExtensionsPage {
                     } else {
                         card
                     }
-                } else {
+                } else if ix < dev_extension_entries_len + remote_entries_len {
                     let extension_ix =
                         self.filtered_remote_extension_indices[ix - dev_extension_entries_len];
                     let extension = &self.remote_extension_entries[extension_ix];
                     self.render_remote_extension(extension, cx)
+                } else if ix < dev_extension_entries_len + remote_entries_len + open_vsx_entries_len
+                {
+                    let extension = &self.open_vsx_extension_entries
+                        [ix - dev_extension_entries_len - remote_entries_len];
+                    ExtensionCard::for_open_vsx(extension)
+                } else {
+                    unreachable!("extension list range exceeded rendered entries")
                 }
             })
             .collect()
@@ -1500,6 +1521,9 @@ impl Render for ExtensionsPage {
                 let mut count = self.filtered_remote_extension_indices.len();
                 if self.filter.include_dev_extensions() {
                     count += self.filtered_dev_extension_indices.len();
+                }
+                if self.filter != ExtensionFilter::Installed && self.provides_filter.is_none() {
+                    count += self.open_vsx_extension_entries.len();
                 }
 
                 if count == 0 {
