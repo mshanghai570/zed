@@ -18,6 +18,11 @@ pub struct ExtensionSettingsContent {
     pub auto_install_extensions: HashMap<Arc<str>, bool>,
     #[serde(default)]
     pub auto_update_extensions: HashMap<Arc<str>, bool>,
+    /// Open VSX registry URL used as an external extension source.
+    ///
+    /// When omitted, Open VSX integration remains available at its official
+    /// registry URL but is not implicitly enabled by this setting.
+    pub open_vsx_registry: Option<Arc<str>>,
     /// The capabilities granted to extensions.
     pub granted_extension_capabilities: Option<Vec<ExtensionCapabilityContent>>,
 }

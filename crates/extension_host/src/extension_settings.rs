@@ -2,6 +2,7 @@ use collections::HashMap;
 use extension::{
     DownloadFileCapability, ExtensionCapability, NpmInstallPackageCapability, ProcessExecCapability,
 };
+use http_client::Url;
 use settings::{RegisterSetting, Settings};
 use std::sync::Arc;
 
@@ -15,6 +16,7 @@ pub struct ExtensionSettings {
     /// Default: { "html": true }
     pub auto_install_extensions: HashMap<Arc<str>, bool>,
     pub auto_update_extensions: HashMap<Arc<str>, bool>,
+    pub open_vsx_registry: Option<Arc<str>>,
     pub granted_capabilities: Vec<ExtensionCapability>,
 }
 
@@ -33,6 +35,13 @@ impl ExtensionSettings {
             .copied()
             .unwrap_or(true)
     }
+
+    pub fn open_vsx_source(&self) -> anyhow::Result<super::open_vsx::OpenVsxSource> {
+        match self.open_vsx_registry.as_deref() {
+            Some(url) => super::open_vsx::OpenVsxSource::new(Url::parse(url)?),
+            None => Ok(super::open_vsx::OpenVsxSource::official()),
+        }
+    }
 }
 
 impl Settings for ExtensionSettings {
@@ -40,6 +49,7 @@ impl Settings for ExtensionSettings {
         Self {
             auto_install_extensions: content.extension.auto_install_extensions.clone(),
             auto_update_extensions: content.extension.auto_update_extensions.clone(),
+            open_vsx_registry: content.extension.open_vsx_registry.clone(),
             granted_capabilities: content
                 .extension
                 .granted_extension_capabilities
