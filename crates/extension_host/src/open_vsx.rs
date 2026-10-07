@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use futures::AsyncReadExt as _;
 use http_client::{AsyncBody, HttpClient, StatusCode, Url};
 use serde::Deserialize;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 const MAX_METADATA_BYTES: usize = 2 * 1024 * 1024;
 
@@ -71,6 +71,52 @@ impl OpenVsxSource {
             serde_json::from_slice(&body).context("parsing Open VSX extension metadata")?;
         metadata.validate()
     }
+
+    pub async fn search(
+        &self,
+        client: Arc<dyn HttpClient>,
+        query: Option<&str>,
+        size: u32,
+        offset: u32,
+    ) -> Result<OpenVsxSearchResult> {
+        if size > 1000 {
+            bail!("Open VSX search size must not exceed 1000");
+        }
+
+        let mut url = self.base_url.join("api/-/search")?;
+        {
+            let mut params = url.query_pairs_mut();
+            if let Some(query) = query.filter(|query| !query.trim().is_empty()) {
+                params.append_pair("query", query);
+            }
+            params
+                .append_pair("size", &size.to_string())
+                .append_pair("offset", &offset.to_string());
+        }
+
+        let mut response = client
+            .get(url.as_str(), AsyncBody::empty(), true)
+            .await
+            .context("requesting Open VSX search results")?;
+        if response.status() != StatusCode::OK {
+            bail!("Open VSX returned HTTP {}", response.status().as_u16());
+        }
+
+        let mut body = Vec::new();
+        response
+            .body_mut()
+            .take((MAX_METADATA_BYTES + 1) as u64)
+            .read_to_end(&mut body)
+            .await
+            .context("reading Open VSX search results")?;
+        if body.len() > MAX_METADATA_BYTES {
+            bail!("Open VSX search results exceed {MAX_METADATA_BYTES} bytes");
+        }
+
+        let result: OpenVsxSearchResult =
+            serde_json::from_slice(&body).context("parsing Open VSX search results")?;
+        result.validate()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -124,6 +170,58 @@ impl OpenVsxExtension {
     pub fn id(&self) -> String {
         format!("{}.{}", self.namespace, self.name)
     }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct OpenVsxSearchResult {
+    pub offset: u32,
+    #[serde(rename = "totalSize")]
+    pub total_size: u32,
+    pub extensions: Vec<OpenVsxSearchEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct OpenVsxSearchEntry {
+    pub url: String,
+    pub files: BTreeMap<String, String>,
+    pub name: String,
+    pub namespace: String,
+    pub version: String,
+    pub timestamp: String,
+    pub verified: bool,
+    #[serde(default, rename = "downloadCount")]
+    pub download_count: Option<u32>,
+    #[serde(default, rename = "displayName")]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub deprecated: bool,
+}
+
+impl OpenVsxSearchResult {
+    fn validate(self) -> Result<Self> {
+        for extension in &self.extensions {
+            validate_segment(&extension.namespace, "namespace")?;
+            validate_segment(&extension.name, "extension name")?;
+            if extension.version.trim().is_empty() || extension.timestamp.trim().is_empty() {
+                bail!("Open VSX search result has incomplete version metadata");
+            }
+            validate_https_url(&extension.url, "extension metadata URL")?;
+            if let Some(download) = extension.files.get("download") {
+                validate_https_url(download, "extension download URL")?;
+            }
+        }
+        Ok(self)
+    }
+}
+
+fn validate_https_url(value: &str, label: &str) -> Result<()> {
+    let url = Url::parse(value).with_context(|| format!("parsing Open VSX {label}"))?;
+    if url.scheme() != "https" {
+        bail!("Open VSX {label} must use HTTPS");
+    }
+    Ok(())
 }
 
 fn validate_segment(value: &str, label: &str) -> Result<()> {
@@ -185,6 +283,31 @@ mod tests {
         assert!(metadata.validate().is_err());
     }
 
+    const SEARCH: &str = r#"{
+        "offset": 18,
+        "totalSize": 42,
+        "extensions": [{
+            "url": "https://open-vsx.org/api/Anthropic/claude-code",
+            "files": {"download": "https://open-vsx.org/api/Anthropic/claude-code/2.1.292/file/Anthropic.claude-code-2.1.292.vsix"},
+            "name": "claude-code",
+            "namespace": "Anthropic",
+            "version": "2.1.292",
+            "timestamp": "2026-10-06T00:00:00Z",
+            "verified": true,
+            "downloadCount": 1234,
+            "displayName": "Claude Code"
+        }]
+    }"#;
+
+    #[test]
+    fn validates_search_results() {
+        let result: OpenVsxSearchResult = serde_json::from_str(SEARCH).unwrap();
+        let result = result.validate().unwrap();
+        assert_eq!(result.offset, 18);
+        assert_eq!(result.total_size, 42);
+        assert_eq!(result.extensions[0].namespace, "Anthropic");
+    }
+
     #[gpui::test]
     async fn fetches_metadata_with_fake_http(executor: gpui::BackgroundExecutor) {
         let body = METADATA.as_bytes().to_vec();
@@ -199,6 +322,38 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(metadata.id(), "Anthropic.claude-code");
+        drop(executor);
+    }
+
+    #[gpui::test]
+    async fn searches_with_query_and_pagination(executor: gpui::BackgroundExecutor) {
+        let body = SEARCH.as_bytes().to_vec();
+        let client = FakeHttpClient::create(move |request| {
+            assert_eq!(request.uri().path(), "/api/-/search");
+            assert_eq!(
+                request.uri().query(),
+                Some("query=claude+code&size=18&offset=18")
+            );
+            let body = body.clone();
+            async move { Ok(Response::builder().status(200).body(body.into()).unwrap()) }
+        });
+
+        let result = OpenVsxSource::official()
+            .search(client, Some("claude code"), 18, 18)
+            .await
+            .unwrap();
+        assert_eq!(result.extensions[0].name, "claude-code");
+        drop(executor);
+    }
+
+    #[gpui::test]
+    async fn rejects_oversized_search_page(executor: gpui::BackgroundExecutor) {
+        let client = FakeHttpClient::with_200_response();
+        let error = OpenVsxSource::official()
+            .search(client, None, 1001, 0)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("must not exceed 1000"));
         drop(executor);
     }
 }
