@@ -39,7 +39,7 @@ impl ExtensionSettings {
     pub fn open_vsx_source(&self) -> anyhow::Result<super::open_vsx::OpenVsxSource> {
         match self.open_vsx_registry.as_deref() {
             Some(url) => super::open_vsx::OpenVsxSource::new(Url::parse(url)?),
-            None => Ok(super::open_vsx::OpenVsxSource::official()),
+            None => anyhow::bail!("Open VSX is disabled"),
         }
     }
 }

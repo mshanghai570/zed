@@ -144,7 +144,7 @@ impl ExtensionCard {
             .display_name
             .clone()
             .unwrap_or_else(|| extension.name.clone());
-        let authors = format!("{} · Open VSX", extension.namespace);
+        let authors = format!("{} · Open VSX preview", extension.namespace);
 
         Self {
             details: ExtensionCardDetails {
