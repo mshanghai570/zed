@@ -1,0 +1,21 @@
+[package]
+name = "endpoint_contract"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Shared contracts for AI endpoints, custom providers, remote MCP, project knowledge, and extension permissions in the Zed fork."
+
+# This crate is intentionally self-contained so it can be reviewed and tested
+# before it is wired into the root workspace. To integrate:
+#   1. Add "crates/endpoint_contract" to `[workspace] members` in the root Cargo.toml.
+#   2. Add `endpoint_contract = { path = "crates/endpoint_contract" }` to
+#      `[workspace.dependencies]`.
+#   3. Remove the `[workspace]` table below once the crate is a member.
+[workspace]
+
+[dependencies]
+anyhow = "1.0.86"
+async-trait = "0.1"
+serde = { version = "1.0.221", features = ["derive", "rc"] }
+serde_json = { version = "1.0.144", features = ["preserve_order"] }
+url = "2.2"
